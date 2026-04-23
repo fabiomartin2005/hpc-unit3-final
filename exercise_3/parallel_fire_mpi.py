@@ -118,46 +118,43 @@ def step_local(local_grid, local_frp, burn_age, rng,
                top_ghost, bot_ghost, top_frp_ghost, bot_frp_ghost):
     """Advance the local slab by one step, using ghost rows for boundary neighbours."""
 
-    # Build extended views (ghost + real + ghost)
-    ext_grid = np.vstack([top_ghost, local_grid, bot_ghost])
-    ext_frp  = np.vstack([top_frp_ghost, local_frp, bot_frp_ghost])
     rows, cols = local_grid.shape
+    new_grid   = local_grid.copy()
 
-    new_grid = local_grid.copy()
-    burning  = (local_grid == 2)
-
-    # transition: burning → burned
+    # ── burning → burned transition ───────────────────────────────────────
+    burning   = (local_grid == 2)
     burn_age[burning] += 1
     exhausted = burning & (burn_age >= BURN_LIFETIME)
     new_grid[exhausted] = 3
 
-    # neighbour FRP accumulation (using extended arrays, offset by 1)
+    # ── build extended grid/frp: top_ghost | local | bot_ghost ────────────
+    ext_grid = np.vstack([top_ghost, local_grid, bot_ghost])   # (rows+2, cols)
+    ext_frp  = np.vstack([top_frp_ghost, local_frp, bot_frp_ghost])
+
+    # FRP only where burning (extended)
+    ext_fire_frp = np.where(ext_grid == 2, ext_frp, 0.0).astype(np.float32)
+
+    # ── accumulate FRP from 4 neighbours into local cells ─────────────────
+    # row offsets: local row i → ext row i+1
     neighbor_frp = np.zeros((rows, cols), dtype=np.float32)
-    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-        nr_start = 1 + dr          # index into ext arrays (1-based for real rows)
-        ext_burn = (ext_grid == 2).astype(np.float32)
-        ext_frp_ = ext_frp * ext_burn
-        # horizontal shift (within columns)
-        if dc == 0:
-            neighbor_frp += ext_frp_[nr_start: nr_start + rows, :]
-        else:
-            col_slice = np.roll(ext_frp_[1: 1 + rows, :], dc, axis=1)
-            # mask wrap-around at domain edges (first/last column)
-            if dc == 1:
-                col_slice[:, 0] = 0
-            else:
-                col_slice[:, -1] = 0
-            neighbor_frp += col_slice
 
-    # vertical neighbours (top/bottom, using extended grid)
-    for dr in [-1, 1]:
-        ext_burn = (ext_grid == 2).astype(np.float32)
-        ext_frp_ = ext_frp * ext_burn
-        neighbor_frp += ext_frp_[1 + dr: 1 + dr + rows, :]
+    # top neighbour    (ext row i)
+    neighbor_frp += ext_fire_frp[0:rows, :]
+    # bottom neighbour (ext row i+2)
+    neighbor_frp += ext_fire_frp[2:rows+2, :]
+    # left neighbour   (same ext row, col-1); zero out wrap-around
+    left  = np.roll(ext_fire_frp[1:rows+1, :], 1, axis=1)
+    left[:, 0] = 0.0
+    neighbor_frp += left
+    # right neighbour  (same ext row, col+1)
+    right = np.roll(ext_fire_frp[1:rows+1, :], -1, axis=1)
+    right[:, -1] = 0.0
+    neighbor_frp += right
 
+    # ── ignition ──────────────────────────────────────────────────────────
     susceptible = (local_grid == 1)
-    has_nb      = neighbor_frp > 0
-    prob        = np.clip(SPREAD_PROB_BASE + FRP_SCALE * neighbor_frp, 0, 0.95)
+    has_nb      = neighbor_frp > 0.0
+    prob        = np.clip(SPREAD_PROB_BASE + FRP_SCALE * neighbor_frp, 0.0, 0.95)
     ignite      = susceptible & has_nb & (rng.random((rows, cols)) < prob)
     new_grid[ignite] = 2
     burn_age[ignite] = 0
