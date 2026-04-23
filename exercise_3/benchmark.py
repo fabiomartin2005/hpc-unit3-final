@@ -42,7 +42,8 @@ def run_mpi(rows, cols, steps, nprocs):
         ["mpiexec", "-n", str(nprocs),
          sys.executable, "parallel_fire_mpi.py",
          "--rows", str(rows), "--cols", str(cols), "--steps", str(steps)],
-        capture_output=True, text=True
+        capture_output=True, text=True,
+        timeout=300
     )
     # parse elapsed from output json written by rank 0
     timing_file = os.path.join(OUT_DIR, "parallel_timing.json")
