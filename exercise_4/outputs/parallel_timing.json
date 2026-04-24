@@ -1,0 +1,9 @@
+{
+  "mode": "parallel_mpi",
+  "processes": 4,
+  "k": 10,
+  "n_iter": 2,
+  "total_s": 0.4535472000716254,
+  "mean_iter_s": 0.22670985001605004,
+  "inertia": 1200000.0
+}
