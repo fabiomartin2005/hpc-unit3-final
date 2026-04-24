@@ -57,7 +57,7 @@ def local_assign_accumulate(local_X, centers):
 
     Returns
     -------
-    labels    : (local_n,) int array
+    labels    : (local_n,) int32 array   ← explicitly int32 to match MPI.INT
     local_sum : (k, d) sum of points per cluster
     local_cnt : (k,) count of points per cluster
     """
@@ -65,7 +65,8 @@ def local_assign_accumulate(local_X, centers):
     d = local_X.shape[1]
     diffs  = local_X[:, np.newaxis, :] - centers[np.newaxis, :, :]
     dists2 = np.sum(diffs ** 2, axis=2)
-    labels = np.argmin(dists2, axis=1)
+    # FIX: cast to int32 so Gatherv MPI.INT type matches on all ranks
+    labels = np.argmin(dists2, axis=1).astype(np.int32)
 
     local_sum = np.zeros((k, d), dtype=np.float64)
     local_cnt = np.zeros(k, dtype=np.float64)
@@ -122,6 +123,17 @@ def kmeans_parallel(X_full: np.ndarray, k: int = N_CLUSTERS,
     n_iter     = 0
     labels_all = np.zeros(X_full.shape[0], dtype=np.int32)
 
+    # FIX: precompute Gatherv layout once, using int32-element counts/displacements
+    n = int(shape[0])
+    n_per = np.array(
+        [n // size + (1 if i < n % size else 0) for i in range(size)],
+        dtype=np.int32,
+    )
+    disp = np.array(
+        [int(np.sum(n_per[:i])) for i in range(size)],
+        dtype=np.int32,
+    )
+
     comm.Barrier()
     t_total = MPI.Wtime()
 
@@ -152,11 +164,13 @@ def kmeans_parallel(X_full: np.ndarray, k: int = N_CLUSTERS,
     total_s = MPI.Wtime() - t_total
 
     # Gather all labels on rank 0
-    n, d    = X_full.shape
-    n_per   = [n // size + (1 if i < n % size else 0) for i in range(size)]
-    disp    = [sum(n_per[:i]) for i in range(size)]
-    recv    = np.empty(n, dtype=np.int32) if rank == 0 else None
-    comm.Gatherv(local_labels, [recv, n_per, disp, MPI.INT], root=0)
+    # FIX: recv buffer is int32; Gatherv type is MPI.INT — everything consistent
+    recv = np.empty(n, dtype=np.int32) if rank == 0 else None
+    comm.Gatherv(
+        local_labels,                        # send: int32
+        [recv, n_per, disp, MPI.INT],        # recv: int32 buffer + MPI.INT type
+        root=0,
+    )
 
     # Inertia on rank 0
     inertia = 0.0
